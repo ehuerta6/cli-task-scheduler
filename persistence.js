@@ -9,6 +9,9 @@ const TASKS_FILE = join(__dirname, "tasks.json");
 export async function loadTasks() {
   try {
     const raw = await readFile(TASKS_FILE, "utf-8");
+
+    if (!raw.trim()) return [];
+
     return JSON.parse(raw);
   } catch (error) {
     if (error.code === "ENOENT") {
