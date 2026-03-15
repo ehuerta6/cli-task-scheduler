@@ -1,4 +1,5 @@
 import { loadTasks, saveTasks } from "./persistence.js";
+import { PriorityQueue } from "./priority-queue.js";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,17 +31,17 @@ export async function retry(fn, maxAttempts = 3) {
 const PRIORITY_VALUE = { high: 3, medium: 2, low: 1 };
 
 export class TaskQueue {
-  #tasks = [];
+  #queue = new PriorityQueue();
 
   async init() {
     const saved = await loadTasks();
-    this.#tasks = saved;
+    this.#queue.fromArray(saved);
     console.log(`  ✓ Loaded ${saved.length} task(s) from disk\n`);
   }
 
   async add({ name, priority = "medium", delay = 0 }) {
     const task = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name,
       priority,
       delay,
@@ -50,21 +51,20 @@ export class TaskQueue {
       completedAt: null,
     };
 
-    this.#tasks.push(task);
-    this.#sortByPriority();
-    await saveTasks(this.#tasks);
+    this.#queue.push(task);
+    await saveTasks(this.#queue);
     console.log(`  + Task added: "${name}" [${priority}] — runs in ${delay}s`);
 
     this.#run(task.id);
   }
 
   list() {
-    return [...this.#tasks];
+    return this.#queue.toArray();
   }
 
   status() {
     const counts = { pending: 0, running: 0, completed: 0, failed: 0 };
-    for (const task of this.#tasks) {
+    for (const task of this.#queue.toArray()) {
       counts[task.status] = (counts[task.status] || 0) + 1;
     }
 
@@ -72,40 +72,34 @@ export class TaskQueue {
   }
 
   async clearCompleted() {
-    const before = this.#tasks.length;
-    this.#tasks = this.#tasks.filter((t) => t.status !== "completed");
-    await saveTasks(this.#tasks);
-    return before - this.#tasks.length;
-  }
-
-  #sortByPriority() {
-    this.#tasks.sort(
-      (a, b) =>
-        (PRIORITY_VALUE[b.priority] || 0) - (PRIORITY_VALUE[a.priority] || 0),
-    );
+    const all = this.#queue.toArray();
+    const remaining = all.filter((t) => t.status !== "completed");
+    this.#queue.fromArray(remaining);
+    await saveTasks(this.#queue);
+    return all.length - remaining.length;
   }
 
   #updateTask(id, changes) {
-    const index = this.#tasks.findIndex((t) => t.id === id);
-    if (index !== -1) {
-      this.#tasks[index] = { ...this.#tasks[index], ...changes };
+    const task = this.#queue.toArray().find((t) => t.id === id);
+    if (task) {
+      Object.assign(task, changes);
     }
   }
 
   async #run(id) {
-    const task = this.#tasks.find((t) => t.id === id);
+    const task = this.#queue.toArray().find((t) => t.id === id);
     if (!task) return;
 
     if (task.delay > 0) {
       await sleep(task.delay * 1000);
     }
+
     this.#updateTask(id, { status: "running" });
-    await saveTasks(this.#tasks);
+    await saveTasks(this.#queue.toArray());
 
     try {
       await retry(async () => {
         const fails = Math.random() < 0.3;
-
         if (fails) throw new Error("Simulated failure");
         await sleep(500);
       });
@@ -119,6 +113,7 @@ export class TaskQueue {
       this.#updateTask(id, { status: "failed" });
       console.log(`\n  ✗ Task failed: "${task.name}" (3 attempts exhausted)`);
     }
-    await saveTasks(this.#tasks);
+
+    await saveTasks(this.#queue.toArray());
   }
 }
